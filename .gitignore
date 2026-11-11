@@ -1,0 +1,14 @@
+# web-ext build output
+web-ext-artifacts/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
+
+# Editors and OS
+.vscode/
+.DS_Store

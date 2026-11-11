@@ -1,0 +1,84 @@
+{
+  "manifest_version": 3,
+  "name": "Frappe Framework DevTools",
+  "version": "1.0.0",
+  "description": "Inspector for Frappe Desk and frappe-ui apps in DevTools, in the style of Vue DevTools. Only for development instances: Frappe 16 or later with developer_mode on.",
+  "icons": {
+    "48": "icons/frappe-f.svg",
+    "96": "icons/frappe-f.svg"
+  },
+  "action": {
+    "default_icon": "icons/frappe-f.svg",
+    "default_title": "Frappe Framework DevTools",
+    "default_popup": "popup/popup.html"
+  },
+  "devtools_page": "devtools/devtools.html",
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://localhost/*",
+        "*://127.0.0.1/*",
+        "*://*.localhost/*",
+        "*://*.local/*",
+        "*://*.test/*"
+      ],
+      "js": [
+        "content/bridge.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://localhost/*",
+        "*://127.0.0.1/*",
+        "*://*.localhost/*",
+        "*://*.local/*",
+        "*://*.test/*"
+      ],
+      "js": [
+        "agent/early.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://localhost/*",
+        "*://127.0.0.1/*",
+        "*://*.localhost/*",
+        "*://*.local/*",
+        "*://*.test/*"
+      ],
+      "js": [
+        "agent/serializer.js",
+        "agent/console_vars.js",
+        "agent/highlighter.js",
+        "agent/view_tree.js",
+        "agent/inspector.js",
+        "agent/ui_tree.js",
+        "agent/ui_inspector.js",
+        "agent/picker.js",
+        "agent/timeline.js",
+        "agent/agent.js"
+      ],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "frappe-framework-devtools@mmdanny89",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  }
+}

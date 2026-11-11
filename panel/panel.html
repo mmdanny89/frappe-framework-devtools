@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Frappe Framework DevTools</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body data-state="waiting">
+  <header class="toolbar">
+    <img class="logo" src="/icons/frappe-f.svg" alt="">
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="tree" class="active"><svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-list-tree"/></svg>Tree</button>
+      <button role="tab" data-tab="timeline"><svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-activity"/></svg>Timeline</button>
+      <button role="tab" data-tab="info"><svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-info"/></svg>Info</button>
+      <button role="tab" data-tab="calls"><svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-arrow-left-right"/></svg>Calls</button>
+    </nav>
+    <span class="spacer"></span>
+    <button id="pick" class="icon-btn" title="Select an element on the page (Esc to cancel)" aria-pressed="false">
+      <svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-crosshair"/></svg>
+    </button>
+    <button id="refresh" class="icon-btn" title="Read the page again" aria-label="Refresh"><svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-refresh-cw"/></svg></button>
+  </header>
+
+  <div id="status" class="status"></div>
+
+  <main>
+    <section id="tab-tree" class="tab active">
+      <div class="split">
+        <div class="pane tree-pane">
+          <input id="tree-filter" type="search" placeholder="Filter by label or fieldname">
+          <div id="tree" class="tree" role="tree"></div>
+        </div>
+        <div id="inspector" class="pane inspector-pane">
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-timeline" class="tab">
+      <div class="calls-toolbar">
+        <input id="timeline-filter" type="search" placeholder="Filter events">
+        <div id="timeline-categories" class="cat-toggles"></div>
+        <span class="spacer"></span>
+        <button id="timeline-pause" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-pause"/></svg><span>Pause</span></button>
+        <button id="timeline-clear"><svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-trash-2"/></svg>Clear</button>
+      </div>
+      <div class="split">
+        <div class="pane calls-pane">
+          <table class="calls timeline">
+            <thead><tr><th>Time</th><th>Type</th><th>Event</th><th>Detail</th></tr></thead>
+            <tbody id="timeline-body"></tbody>
+          </table>
+        </div>
+        <div id="timeline-detail" class="pane inspector-pane">
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-info" class="tab">
+      <div id="info" class="pane"></div>
+    </section>
+
+    <section id="tab-calls" class="tab">
+      <div class="calls-toolbar">
+        <input id="calls-filter" type="search" placeholder="Filter by method or URL">
+        <label><input id="calls-errors" type="checkbox"> Errors only</label>
+        <button id="calls-clear"><svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-trash-2"/></svg>Clear</button>
+      </div>
+      <div class="split">
+        <div class="pane calls-pane">
+          <table class="calls">
+            <thead><tr><th>Verb</th><th>Method</th><th>Status</th><th>ms</th></tr></thead>
+            <tbody id="calls-body"></tbody>
+          </table>
+        </div>
+        <div id="call-detail" class="pane inspector-pane">
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="icons.js"></script>
+  <script src="connection.js"></script>
+  <script src="json_view.js"></script>
+  <script src="tree_view.js"></script>
+  <script src="inspector_view.js"></script>
+  <script src="info_view.js"></script>
+  <script src="calls_view.js"></script>
+  <script src="timeline_view.js"></script>
+  <script src="panel.js"></script>
+</body>
+</html>
