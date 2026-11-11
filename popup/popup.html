@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Frappe Framework DevTools</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="/icons/frappe-f.svg" alt="" width="20" height="20">
+    <h1>Frappe Framework DevTools</h1>
+  </header>
+  <p id="state" class="state"><span class="dot"></span><span id="state-text">Checking…</span></p>
+  <dl id="details" hidden>
+    <dt><svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-globe"/></svg>Site</dt><dd id="site"></dd>
+    <dt><svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-user"/></svg>User</dt><dd id="user"></dd>
+    <dt><svg class="icon" aria-hidden="true"><use href="/icons/lucide.svg#icon-layers"/></svg>Version</dt><dd id="version"></dd>
+  </dl>
+  <p id="hint" class="hint"></p>
+  <script src="popup.js"></script>
+</body>
+</html>
