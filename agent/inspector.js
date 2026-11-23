@@ -9,13 +9,34 @@
       this.deep = new NS.Serializer({ maxDepth: 5 });
       // A control points to frm, the layout, etc. More depth makes the result huge.
       this.shallow = new NS.Serializer({ maxDepth: 2 });
+      this.grids = new NS.GridInspector();
     }
 
-    // Returns { sections: [{ title, value | table, open }], consoleVars }.
+    // Returns { sections: [{ title, value | table, open }], consoleVars, actions }.
     inspect(target) {
       const sections = this.sectionsFor(target).map((s) => this.serializeSection(s));
       const consoleVars = this.exposeToConsole(target);
-      return { sections, consoleVars };
+      return { sections, consoleVars, actions: this.actionsFor(target) };
+    }
+
+    // Shortcuts to the DocType behind a node: the form, a meta, a Link or Table field, a table row.
+    // Same rules as the "Customize" and "Edit DocType" items of the Frappe form menu.
+    actionsFor(t) {
+      const doctype = linkedDoctype(t);
+      if (!doctype) return [];
+      const actions = [];
+      if (frappe.model.can_create("DocType")) actions.push({ name: "edit-doctype", label: `Edit DocType: ${doctype}` });
+      if (canCustomize(doctype)) actions.push({ name: "customize-form", label: `Customize Form: ${doctype}` });
+      return actions;
+    }
+
+    // Only navigates. The panel can ask only for an action that actionsFor() offers.
+    action(t, name) {
+      if (!this.actionsFor(t).some((a) => a.name === name)) return null;
+      const doctype = linkedDoctype(t);
+      if (name === "edit-doctype") frappe.set_route("Form", "DocType", doctype);
+      if (name === "customize-form") frappe.set_route("Form", "Customize Form", { doc_type: doctype });
+      return `Opened ${doctype}`;
     }
 
     sectionsFor(t) {
@@ -26,6 +47,7 @@
         case "section": return [section("DocField", t.df, true)];
         case "field": return this.fieldSections(t);
         case "row": return this.rowSections(t);
+        case "cell": return this.cellSections(t);
         case "list": return this.listSections(t.list);
         case "dialog": return this.dialogSections(t.dialog);
         case "meta": return this.metaSections(t.meta);
@@ -62,19 +84,37 @@
       const doc = frm?.doc || dialog?.doc;
       return [
         section("Value", control ? control.get_value() : doc?.[df.fieldname], true),
+        ...(control?.grid ? this.grids.gridSections(control.grid) : []),
         section("Why does it look like this?", {
           disp_status: control?.disp_status ?? "no control",
-          reasons: explain(df, control, frm?.doc),
+          reasons: explain(control?.df || df, control, frm?.doc),
         }, true),
         section("DocField (df)", df, true),
         { title: "Control", value: control, shallow: true },
       ];
     }
 
-    rowSections({ row, df }) {
+    rowSections(t) {
       return [
-        section("Row", row, true),
-        section(`Table: ${df.fieldname} → ${df.options}`, df),
+        section("Row", t.row, true),
+        section("Row state", this.grids.rowState(t), true),
+        section(`Table: ${t.df.fieldname} → ${t.df.options}`, t.df),
+      ];
+    }
+
+    // A cell has a control only while it is edited, in the grid row or in the row form.
+    cellSections(t) {
+      const { df, control, row, frm } = t;
+      return [
+        section("Value", control ? control.get_value() : row[df.fieldname], true),
+        section("Why does it look like this?", {
+          disp_status: control?.disp_status ?? "not being edited (no control)",
+          reasons: explain(df, control, frm.doc, t.grid),
+        }, true),
+        section("Cell", this.grids.cellState(t), true),
+        section("DocField (df) of this row", df),
+        section("Row", row),
+        ...(control ? [{ title: "Control", value: control, shallow: true }] : []),
       ];
     }
 
@@ -132,6 +172,8 @@
         $doc: t.row || t.frm?.doc || t.dialog?.doc,
         $df: t.df,
         $control: t.control,
+        $grid: t.grid || t.control?.grid,
+        $row: t.gridRow,
         $meta: t.meta || t.frm?.meta,
         $list: t.list,
         $dialog: t.dialog,
@@ -165,11 +207,6 @@
       return { site: frappe.boot.sitename, user: frappe.session.user, version: `Frappe ${frappe.boot.versions?.frappe}` };
     }
 
-    // Desk nodes have no actions.
-    action() {
-      return null;
-    }
-
     // The page element for a node, to highlight it.
     element(t) {
       const layout = t.frm?.layout;
@@ -180,6 +217,7 @@
         case "section": return layout?.sections.find((s) => s.df.fieldname === fieldname)?.wrapper?.[0];
         case "field": return t.control?.$wrapper?.[0];
         case "row": return t.control?.grid?.wrapper?.find(`.grid-row[data-name="${CSS.escape(t.row.name)}"]`)[0];
+        case "cell": return this.grids.cellElement(t);
         case "list": return t.list.$result?.[0];
         case "dialog": return t.dialog.$wrapper?.find(".modal-content")[0];
         default: return null;
@@ -188,8 +226,11 @@
   }
 
   // Common reasons why a field is hidden, read-only or mandatory.
-  function explain(df, control, doc) {
+  function explain(df, control, doc, grid) {
     const reasons = [];
+    if (grid && grid.display_status !== "Write") {
+      reasons.push(`The table is ${grid.display_status === "Read" ? "read only" : "hidden"} (grid display_status ${grid.display_status})`);
+    }
     if (df.hidden) reasons.push("df.hidden = 1");
     if (df.hidden_due_to_dependency) reasons.push(`Hidden by depends_on: ${df.depends_on}`);
     if (df.read_only) reasons.push("df.read_only = 1");
@@ -198,10 +239,34 @@
     if (df.permlevel) reasons.push(`permlevel ${df.permlevel}: depends on the role permissions at that level`);
     if (doc?.docstatus === 1 && !df.allow_on_submit) reasons.push("Document is submitted and the field has no allow_on_submit");
     if (doc?.docstatus === 2) reasons.push("Document is cancelled");
-    if (control?.disp_status !== "None" && control?.$wrapper && !control.$wrapper.is(":visible")) {
+    if ((df.hidden || df.hidden_due_to_dependency) && NS.agent?.formTools?.isRevealed(control)) {
+      reasons.push("On screen anyway: \"Show hidden fields\" of Frappe Framework DevTools is on");
+    } else if (control?.disp_status !== "None" && control?.$wrapper && !control.$wrapper.is(":visible")) {
       reasons.push("Visible, but in another tab or in a collapsed section");
     }
     return reasons;
+  }
+
+  const LINK_TYPES = new Set(["Link", "Table", "Table MultiSelect"]);
+
+  function linkedDoctype(t) {
+    switch (t.kind) {
+      case "form": return t.frm.doctype;
+      case "meta": return t.meta.name;
+      case "row": return t.df.options;
+      case "field":
+      case "cell": return LINK_TYPES.has(t.df.fieldtype) ? t.df.options : null;
+      default: return null;
+    }
+  }
+
+  // Frappe cannot customize core DocTypes or Singles. A custom DocType is edited directly.
+  function canCustomize(doctype) {
+    return frappe.model.can_create("Custom Field")
+      && frappe.model.can_create("Property Setter")
+      && !frappe.model.core_doctypes_list.includes(doctype)
+      && !frappe.model.is_single(doctype)
+      && !locals.DocType?.[doctype]?.custom;
   }
 
   function section(title, value, open = false) {

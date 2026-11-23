@@ -101,7 +101,9 @@ input[type="search"] {
 body:not([data-state="active"]) .status { display: block; }
 body:not([data-state="active"]) main,
 body:not([data-state="active"]) #pick,
-body:not([data-state="active"]) #refresh { display: none; }
+body:not([data-state="active"]) #refresh,
+body:not([data-state="active"]) .form-tool,
+body:not([data-form="open"]) .form-tool { display: none; }
 .error-bar { padding: 4px 8px; background: var(--warn-bg); color: var(--danger); font-family: monospace; }
 
 /* Tabs and split panes */
@@ -252,5 +254,6 @@ td { font-family: monospace; font-size: 11px; }
 .flag-loading { color: var(--accent); }
 .flag-error { color: var(--danger); }
 .flag-not-fetched { color: var(--muted); }
+.flag-editing, .flag-checked { color: var(--accent); }
 .kind-component, .kind-store, .kind-global { color: var(--keyword); }
 .kind-resource, .kind-request { color: var(--number); }

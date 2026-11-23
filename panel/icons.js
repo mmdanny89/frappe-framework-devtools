@@ -97,6 +97,9 @@ const FLAG_ICONS = {
   loading: "loader",
   error: "circle-alert",
   "not-fetched": "circle-dashed",
+  "in-grid": "rows-3",
+  editing: "text-cursor-input",
+  checked: "square-check",
 };
 
 const CATEGORY_ICONS = {
