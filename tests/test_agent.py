@@ -7,7 +7,9 @@ Environment variables:
   FRAPPE_URL       site URL (default http://mysite.local:8000)
   FRAPPE_HOST_MAP  Chromium rule to resolve the host (default "MAP mysite.local 127.0.0.1")
   FRAPPE_USER      user (default Administrator)
-  FRAPPE_PWD       password (required)
+  FRAPPE_PWD       password (or FRAPPE_SID)
+  FRAPPE_SID       an existing session id, instead of the password
+                   (for example from `bench --site <site> browse --user Administrator`)
   CHROMIUM_PATH    Chromium executable (optional)
   TEST_OUT         folder for the highlight screenshot (default /tmp)
 """
@@ -171,16 +173,165 @@ def check_timeline(page):
     check(True, "live events (timeline-events) after a change")
 
 
+def check_child_tables(page):
+    """Cells of a table row (sent only while the row is open), grid state, row state and the picker."""
+    goto(page, ["Form", "User", "Administrator"])
+    page.wait_for_function("cur_frm?.doctype === 'User'")
+    table, row_name = page.evaluate("""() => {
+        const tables = cur_frm.layout.fields_list.filter(c => c.grid?.grid_rows?.length);
+        const c = tables.find(c => c.grid.display_status === 'Write') || tables[0];
+        return [c.df.fieldname, c.grid.grid_rows[0].doc.name];
+    }""")
+    row_id = f"form/row/{table}/{row_name}"
+    tree = send(page, {"type": "tree"}, "tree")["tree"]
+    row = next(n for n in walk(tree) if n["id"] == row_id)
+    check(row.get("lazy") and not row.get("children"), f"child tables: a closed row sends no cells ({row_id})")
+
+    page.evaluate("window.__msgs = []")
+    page.evaluate("(id) => postMessage({source: 'frappe-devtools-bridge', json: JSON.stringify({type: 'expand', id, open: true})}, location.origin)", row_id)
+    page.wait_for_function("(id) => __msgs.some(m => m.type === 'tree-changed' && JSON.stringify(m.tree).includes(id + '/field/'))", arg=row_id, timeout=4000)
+    tree = [m for m in page.evaluate("window.__msgs") if m["type"] == "tree-changed"][-1]["tree"]
+    row = next(n for n in walk(tree) if n["id"] == row_id)
+    cells = row.get("children") or []
+    columns = page.evaluate(f"cur_frm.fields_dict[{json.dumps(table)}].grid.visible_columns.map(([df]) => df.fieldname)")
+    in_grid = [c["id"].rsplit("/", 1)[1] for c in cells if "in-grid" in c["flags"]]
+    check(len(cells) > 0 and in_grid == columns, f"child tables: open row sends its cells ({len(cells)}), grid columns flagged {in_grid}")
+    inspect_all(page, [row], "Open row")
+
+    cell = f"{row_id}/field/{columns[0]}"
+    res = send(page, {"type": "inspect", "id": cell}, "inspect")
+    value = page.evaluate(f"cur_frm.doc[{json.dumps(table)}][0][{json.dumps(columns[0])}]")
+    titles = [x["title"] for x in res["sections"]]
+    check(res["sections"][0]["value"] == value and "Cell" in titles, f"cell: value {value!r} and sections {titles}")
+    check(page.evaluate("window.$row?.doc?.name") == row_name and page.evaluate("Boolean(window.$grid?.grid_rows)"), "cell: $row and $grid in the console")
+
+    res = send(page, {"type": "inspect", "id": f"form/field/{table}"}, "inspect")
+    grid = next(x for x in res["sections"] if x["title"] == "Grid")["value"]
+    cols = next(x for x in res["sections"] if x["title"].startswith("Grid columns"))["table"]
+    rows = page.evaluate(f"cur_frm.doc[{json.dumps(table)}].length")
+    check(grid["rows"] == rows and grid["child_doctype"] and [c["fieldname"] for c in cols] == columns, f"grid state: {grid['child_doctype']}, {grid['rows']} rows, {grid['display_status']}, columns from {grid['columns_from']}")
+    res = send(page, {"type": "inspect", "id": row_id}, "inspect")
+    state = next(x for x in res["sections"] if x["title"] == "Row state")["value"]
+    check(state["drawn"] and state["page"] == 1 and not state["row_form_open"], f"row state: {state}")
+
+    # Picker on a grid cell, then on a field of the open row form.
+    pid = page.evaluate(f"FrappeDevtools.agent.picker.idFromElement(cur_frm.fields_dict[{json.dumps(table)}].grid.grid_rows[0].columns[{json.dumps(columns[0])}][0])")
+    check(pid == cell, f"picker on a grid cell -> {pid}")
+    page.evaluate(f"void cur_frm.fields_dict[{json.dumps(table)}].grid.grid_rows[0].toggle_view(true)")
+    page.wait_for_timeout(800)
+    res = send(page, {"type": "inspect", "id": row_id}, "inspect")
+    state = next(x for x in res["sections"] if x["title"] == "Row state")["value"]
+    check(state["row_form_open"], "row state: the row form is open")
+    res = send(page, {"type": "inspect", "id": cell}, "inspect")
+    cell_state = next(x for x in res["sections"] if x["title"] == "Cell")["value"]
+    check(cell_state["edited_in"] == "row form", f"cell in the open row form: {cell_state}")
+    pid = page.evaluate(f"""FrappeDevtools.agent.picker.idFromElement(
+        cur_frm.fields_dict[{json.dumps(table)}].grid.grid_rows[0].grid_form.fields_dict[{json.dumps(columns[0])}].$wrapper[0])""")
+    check(pid == cell, f"picker on the row form field -> {pid}")
+    tree = send(page, {"type": "tree"}, "tree")["tree"]
+    check("editing" in next(n for n in walk(tree) if n["id"] == row_id)["flags"], "row flagged as editing")
+    page.evaluate(f"void cur_frm.fields_dict[{json.dumps(table)}].grid.grid_rows[0].toggle_view(false)")
+
+    page.evaluate("(id) => postMessage({source: 'frappe-devtools-bridge', json: JSON.stringify({type: 'expand', id, open: false})}, location.origin)", row_id)
+    page.wait_for_timeout(300)
+    tree = send(page, {"type": "tree"}, "tree")["tree"]
+    check(not next(n for n in walk(tree) if n["id"] == row_id).get("children"), "child tables: a closed row drops its cells")
+
+
+def check_form_tools(page):
+    """Show hidden fields, mark fields and the DocType shortcuts. Client side only: nothing is saved."""
+    goto(page, ["Form", "User", "Administrator"])
+    page.wait_for_function("cur_frm?.doctype === 'User'")
+    hidden = page.evaluate("""() => {
+        const c = cur_frm.layout.fields_list.find(c => c.df.hidden && !c.df.permlevel && !c.df.get_status && c.$wrapper?.hasClass('hide-control'));
+        return c && c.df.fieldname;
+    }""")
+    check(bool(hidden), f"form tools: User has a hidden field to test ({hidden})")
+    page.evaluate("void (window.__frms = [cur_frm])")
+    is_hidden = f"cur_frm.fields_dict[{json.dumps(hidden)}].$wrapper.hasClass('hide-control')"
+
+    res = send(page, {"type": "form-tool", "tool": "reveal", "on": True}, "form-tools")
+    check(res.get("reveal") is True and res.get("mark") is False, f"reveal on: agent state {res}")
+    page.wait_for_timeout(500)
+    check(not page.evaluate(is_hidden), f"reveal: {hidden} is on screen")
+    check(page.evaluate(f"cur_frm.fields_dict[{json.dumps(hidden)}].df.hidden") == 1, "reveal: df.hidden keeps its real value")
+    sections = page.evaluate("cur_frm.layout.sections.filter(s => s.df?.hidden).map(s => s.wrapper.hasClass('hide-control'))")
+    check(not any(sections), f"reveal: hidden sections are on screen ({len(sections)})")
+    tree = send(page, {"type": "tree"}, "tree")["tree"]
+    node = next(n for n in walk(tree) if n["id"] == f"form/field/{hidden}")
+    check("hidden" in node["flags"], f"reveal: the tree still flags {hidden} as hidden {node['flags']}")
+    why = send(page, {"type": "inspect", "id": f"form/field/{hidden}"}, "inspect")["sections"][1]["value"]["reasons"]
+    check(any("Show hidden fields" in r for r in why), f"reveal: the inspector says why it is on screen {why}")
+
+    # Global: it follows the user to the next form.
+    goto(page, ["Form", "ToDo", "new"])
+    page.wait_for_function("cur_frm?.doctype === 'ToDo'")
+    page.wait_for_timeout(1500)
+    page.evaluate("window.__frms.push(cur_frm)")
+    todo_hidden = page.evaluate("cur_frm.layout.fields_list.filter(c => c.df.hidden && !c.df.permlevel && !c.df.get_status).map(c => c.$wrapper.hasClass('hide-control'))")
+    check(todo_hidden and not any(todo_hidden), f"reveal: follows to the next form (ToDo, {len(todo_hidden)} hidden fields)")
+
+    send(page, {"type": "form-tool", "tool": "reveal", "on": False}, "form-tools")
+    page.wait_for_timeout(300)
+    todo_hidden = page.evaluate("cur_frm.layout.fields_list.filter(c => c.df.hidden && !c.df.permlevel && !c.df.get_status).map(c => c.$wrapper.hasClass('hide-control'))")
+    check(all(todo_hidden), "reveal off: ToDo hides its fields again")
+    wrapped = page.evaluate("""__frms.flatMap(f => [...f.layout.fields_list, ...f.layout.sections, ...f.layout.tabs])
+        .filter(c => Object.hasOwn(c, 'get_status') || Object.hasOwn(c, 'refresh')).length""")
+    check(wrapped == 0, f"reveal off: no wrapped get_status left ({wrapped})")
+
+    # Marks: a fake custom field (only in the browser) gets a solid outline.
+    page.evaluate("cur_frm.fields_dict.description.df.is_custom_field = 1")
+    send(page, {"type": "form-tool", "tool": "mark", "on": True}, "form-tools")
+    page.wait_for_timeout(300)
+    outline = page.evaluate("getComputedStyle(cur_frm.fields_dict.description.$wrapper[0]).outlineStyle")
+    check(outline == "solid", f"mark: custom field outlined ({outline})")
+    tree = send(page, {"type": "tree"}, "tree")["tree"]
+    node = next(n for n in walk(tree) if n["id"] == "form/field/description")
+    check("custom" in node["flags"], f"tree flags custom fields {node['flags']}")
+    page.screenshot(path=str(OUT / "frappe-devtools-marks.png"))
+    page.evaluate("postMessage({source: 'frappe-devtools-bridge', json: JSON.stringify({type: 'panel-closed'})}, location.origin)")
+    page.wait_for_timeout(200)
+    check(not page.evaluate("document.querySelector('style[data-frappe-devtools]')"), "panel closed: marks removed")
+    page.evaluate("cur_frm.fields_dict.description.df.is_custom_field = 0")
+
+    # Shortcuts: a Link field opens the DocType it points to. Core DocTypes (User) cannot be customized.
+    link = page.evaluate("cur_frm.meta.fields.find(f => f.fieldtype === 'Link' && f.options === 'User').fieldname")
+    res = send(page, {"type": "inspect", "id": f"form/field/{link}"}, "inspect")
+    names = [a["name"] for a in res.get("actions", [])]
+    check(names == ["edit-doctype"], f"shortcuts on a Link to User: {names}")
+    res = send(page, {"type": "inspect", "id": "form"}, "inspect")
+    names = [a["name"] for a in res.get("actions", [])]
+    check(names == ["edit-doctype", "customize-form"], f"shortcuts on the ToDo form: {names}")
+    res = send(page, {"type": "action", "id": f"form/field/{link}", "action": "customize-form"}, "action-done")
+    check(res["result"] is None, "shortcuts: an action that is not offered does not run")
+    send(page, {"type": "action", "id": "form", "action": "customize-form"}, "action-done")
+    page.wait_for_timeout(1500)
+    route = page.evaluate("[frappe.get_route(), cur_frm?.doc?.doc_type]")
+    check(route[0][:2] == ["Form", "Customize Form"] and route[1] == "ToDo", f"Customize Form opens for ToDo: {route}")
+    goto(page, ["Form", "ToDo", "new"])
+    # Frappe can load the DocType editor as a new page, so check the URL, not the route.
+    send(page, {"type": "action", "id": f"form/field/{link}", "action": "edit-doctype"}, "action-done")
+    page.wait_for_timeout(3000)
+    check("/doctype/User" in page.url, f"Edit DocType opens User: {page.url}")
+
+
+def login(page):
+    status = page.evaluate("""([usr, pwd]) => fetch('/api/method/login', {method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: new URLSearchParams({usr, pwd})}).then(r => r.status)""", [os.environ.get("FRAPPE_USER", "Administrator"), os.environ["FRAPPE_PWD"]])
+    print("login:", status)
+
+
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=os.environ.get("CHROMIUM_PATH"), args=[f"--host-resolver-rules={HOST_MAP}"])
         page = browser.new_page(viewport={"width": 1400, "height": 900})
         page.on("pageerror", lambda e: print("  pageerror:", e))
         page.goto(f"{BASE}/login")
-        status = page.evaluate("""([usr, pwd]) => fetch('/api/method/login', {method: 'POST',
-            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: new URLSearchParams({usr, pwd})}).then(r => r.status)""", [os.environ.get("FRAPPE_USER", "Administrator"), os.environ["FRAPPE_PWD"]])
-        print("login:", status)
+        if os.environ.get("FRAPPE_SID"):
+            page.context.add_cookies([{"name": "sid", "value": os.environ["FRAPPE_SID"], "url": BASE}])
+        else:
+            login(page)
         page.goto(f"{BASE}/desk/user/Administrator")
         page.wait_for_function("window.cur_frm?.doctype === 'User'", timeout=20000)
         print("site:", page.evaluate("frappe.boot.sitename"), "· frappe", page.evaluate("frappe.boot.versions.frappe"))
@@ -257,6 +408,8 @@ def main():
 
         check_navigation(page)
         check_timeline(page)
+        check_child_tables(page)
+        check_form_tools(page)
         browser.close()
     print("\nFAILURES:" if failures else "\nAll OK", failures or "")
     sys.exit(1 if failures else 0)

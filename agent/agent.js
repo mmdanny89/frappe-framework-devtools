@@ -1,5 +1,5 @@
-// Agent that lives in the page (MAIN world). It detects the kind of page, hooks its events,
-// answers the panel commands and tells the panel when the screen changes.
+// Agent that lives in the page (MAIN world). It detects the kind of page, hooks its events
+// and tells the panel when the screen changes. agent/commands.js answers the panel commands.
 //
 // The extension works only on development instances of Frappe 16 or later:
 // the host must be in the manifest list, developer_mode must be on and Frappe must be 16+.
@@ -34,41 +34,12 @@
       this.highlighter = new NS.Highlighter();
       this.picker = new NS.Picker(this);
       this.timeline = new NS.Timeline({ send: (msg) => this.send(msg), isLive: () => this.panelSeen });
+      this.commands = new NS.Commands(this);
     }
 
     start() {
       window.addEventListener("message", (event) => this.onMessage(event));
       this.waitForPage();
-    }
-
-    // Commands from the panel and the background script.
-    handle(msg) {
-      if (msg.type === "status") return this.sendStatus();
-      // The last DevTools panel of this tab closed: stop everything that changes the page.
-      if (msg.type === "panel-closed") {
-        this.panelSeen = false;
-        this.picker.stop();
-        this.highlighter.hide();
-        return;
-      }
-      // Any command proves that a panel is open, even if a "panel-closed" arrived out of order.
-      this.panelSeen = true;
-      if (msg.type === "hello") {
-        this.sendStatus();
-        if (this.state === "active") this.sendTree();
-        return;
-      }
-      if (this.state !== "active") return this.sendStatus();
-      switch (msg.type) {
-        case "tree": return this.sendTree();
-        case "inspect": return this.sendInspect(msg.id);
-        case "highlight": return this.highlight(msg.id);
-        case "pick": return msg.on ? this.startPicker() : this.picker.stop();
-        case "info": return this.send({ type: "info", mode: this.mode, ...this.view.inspector.info() });
-        case "action": return this.runAction(msg.id, msg.action, msg.confirmed === true);
-        case "timeline": return this.send({ type: "timeline", events: this.timeline.all() });
-        case "timeline-clear": return this.timeline.clear();
-      }
     }
 
     waitForPage() {
@@ -107,6 +78,7 @@
       this.mode = "desk";
       NS.early?.disable(); // Desk calls come from the frappe.call hook
       this.view = { tree: new NS.ViewTree(), inspector: new NS.Inspector() };
+      this.formTools = new NS.FormTools();
       this.installDeskHooks();
       this.timeline.installDesk();
       this.becomeActive();
@@ -160,6 +132,7 @@
 
     // Sends the tree only if it differs from the last one the panel got.
     pushIfChanged() {
+      this.syncFormTools();
       const tree = this.view.tree.build();
       const json = JSON.stringify(tree);
       if (json === this.lastTreeJson) return;
@@ -169,34 +142,15 @@
 
     // The panel asked for the tree: always send it.
     sendTree() {
+      this.syncFormTools();
       const tree = this.view.tree.build();
       this.lastTreeJson = JSON.stringify(tree);
       this.send({ type: "tree", tree });
     }
 
-    sendInspect(id) {
-      const target = this.view.tree.resolve(id);
-      if (!target) return this.send({ type: "inspect", id, missing: true });
-      this.send({ type: "inspect", id, ...this.view.inspector.inspect(target) });
-    }
-
-    runAction(id, action, confirmed) {
-      const target = this.view.tree.resolve(id);
-      const result = target && this.view.inspector.action(target, action, confirmed);
-      this.send({ type: "action-done", id, action, result });
-      this.schedulePush();
-    }
-
-    highlight(id) {
-      const target = id && this.view.tree.resolve(id);
-      this.highlighter.show(target && this.view.inspector.element(target), id);
-    }
-
-    startPicker() {
-      this.picker.start({
-        onPick: (id) => this.send({ type: "picked", id }),
-        onCancel: () => this.send({ type: "pick-cancelled" }),
-      });
+    // The form tools follow the form on screen. Form tools exist only in Desk mode.
+    syncFormTools() {
+      this.formTools?.sync(this.view.tree.currentForm());
     }
 
     setState(state, reason) {
@@ -223,7 +177,7 @@
       if (event.source !== window || event.data?.source !== BRIDGE) return;
       const msg = JSON.parse(event.data.json);
       try {
-        this.handle(msg);
+        this.commands.handle(msg);
       } catch (e) {
         this.send({ type: "error", message: e.message, stack: e.stack, command: msg.type });
       }

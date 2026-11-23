@@ -28,6 +28,9 @@ const FLAG_LABELS = {
   submitted: "submitted",
   cancelled: "cancelled",
   child: "child table",
+  "in-grid": "grid column",
+  editing: "editing",
+  checked: "selected",
   single: "single",
   custom: "custom",
   loading: "loading",
@@ -40,10 +43,12 @@ const OPEN_BY_DEFAULT = new Set(["form", "tab", "dialog", "live", "component", "
 
 class TreeView {
   // onSelect(id) on click. onHover(id | null) on mouse over.
-  constructor(container, { onSelect, onHover }) {
+  // onExpand(id, open) when a lazy node (a table row) opens or closes: the agent sends its children.
+  constructor(container, { onSelect, onHover, onExpand }) {
     this.container = container;
     this.onSelect = onSelect;
     this.onHover = onHover;
+    this.onExpand = onExpand;
     this.nodes = [];
     this.byId = new Map();
     this.parentOf = new Map();
@@ -97,7 +102,7 @@ class TreeView {
     row.style.paddingLeft = `${4 + depth * 14}px`;
     if (node.id === this.selectedId) row.classList.add("selected");
 
-    const hasChildren = Boolean(node.children?.length);
+    const hasChildren = Boolean(node.children?.length || node.lazy);
     const open = this.filter || this.expanded.has(node.id);
     // Fixed-width lanes for the caret and the kind icon keep every row aligned.
     const caret = row.appendChild(el("span", "caret"));
@@ -123,6 +128,7 @@ class TreeView {
     event.stopPropagation();
     if (this.expanded.has(id)) this.expanded.delete(id);
     else this.expanded.add(id);
+    if (this.byId.get(id)?.lazy) this.onExpand?.(id, this.expanded.has(id));
     this.draw();
   }
 
@@ -144,6 +150,8 @@ class TreeView {
         this.known.add(node.id);
         if (OPEN_BY_DEFAULT.has(node.kind)) this.expanded.add(node.id);
       }
+      // Open in the panel but without children: a reloaded page forgot it. Ask again.
+      if (node.lazy && !node.children && this.expanded.has(node.id)) this.onExpand?.(node.id, true);
       this.index(node.children || [], node.id);
     }
   }

@@ -67,13 +67,13 @@ The left side shows the tree of the current view:
 | Node | Content |
 |---|---|
 | Route | The current URL, `frappe.get_route()`, `frappe.route_options` and the last 15 routes. |
-| Form | The open form, with its tabs, sections and fields. Child tables show their rows. |
+| Form | The open form, with its tabs, sections and fields. Child tables show their rows, and an open row shows its cells. |
 | Meta (inside Form) | The meta of the form's DocType. |
 | List | The list view: filters, sort order, queried fields and loaded rows. |
 | Dialog | Each open dialog, with its fields and values. |
 | Cached meta | Every DocType whose meta is already on the client (`locals.DocType`). |
 
-The labels on each node show its state: `hidden`, `read only`, `mandatory`, `new`, `not saved`, `submitted`, `cancelled`, `child table`, `single` and `custom`.
+The labels on each node show its state: `hidden`, `read only`, `mandatory`, `new`, `not saved`, `submitted`, `cancelled`, `child table`, `single` and `custom`. A field is `custom` when it comes from a Custom Field. A field stays `hidden` while **Show hidden fields** puts it on screen. A cell that the grid shows as a column has `grid column`. A row has `editing` while it is edited in the grid or in its row form, and `selected` when its checkbox is on.
 
 The right side is the inspector for the selected node. For a field, it shows:
 
@@ -82,6 +82,28 @@ The right side is the inspector for the selected node. For a field, it shows:
 - **DocField (df):** the full docfield, including the properties that code changes, such as `hidden_due_to_dependency`.
 - **Control:** the control object, two levels deep.
 
+#### Child tables
+
+A Table field shows its rows. Open a row to see its cells: the agent sends the cells of a row only while the row is open in the panel, because a big table would send thousands of nodes. The tree filter finds only the cells of open rows.
+
+- **Table field:** after the value, the **Grid** section shows the child DocType, `display_status`, whether the grid is editable, sortable or has static rows, `cannot_add_rows` and `cannot_delete_rows`, the number of rows, the selected rows, the filter, the page, the row that is open or edited inline, where the columns come from (user settings, `editable_fields` or `in_list_view`) and the fields that have a `set_query`. **Grid columns** lists the columns the grid shows, in order, with their width.
+- **Row:** the row data and **Row state**: whether the grid has drawn it (rows on another page are not drawn yet), its page, whether it is selected, and whether its row form is open or it is edited inline.
+- **Cell:** the value, why it looks like this, **Cell** (whether it is a grid column and where it is edited), the row's own docfield copy, which the row's `depends_on` changes, and the control while the cell is edited.
+
+The element picker selects a cell of the grid or a field of the open row form, and opens its row in the tree. In the console, `$grid` is the Grid object and `$row` the GridRow.
+
+Some nodes have buttons that open the DocType behind them. They only navigate and change nothing:
+
+| Node | DocType |
+|---|---|
+| Form | The DocType of the form |
+| Meta | That DocType |
+| Link, Table or Table MultiSelect field or cell | The DocType in `options` |
+| Child table row | The child DocType |
+
+- **Edit DocType** opens the DocType form. It shows if you can create DocTypes.
+- **Customize Form** opens Customize Form for the DocType. It follows the rules of the Frappe form menu: you need permission to create Custom Field and Property Setter, and it does not show for core DocTypes, Singles or custom DocTypes. For a custom DocType, use **Edit DocType**.
+
 For a meta, the fields show in a table with a filter. The properties and the permissions are in separate sections.
 
 Other tree actions:
@@ -89,6 +111,15 @@ Other tree actions:
 - Move the mouse over a node to highlight its element on the page.
 - Type in the filter to search by label or by fieldname.
 - Click the crosshair button to select a field on the page. The panel selects the node of the field, the table row or the dialog. Press Esc to cancel.
+
+#### Form tools
+
+While a Desk form is open, the panel toolbar shows two more buttons:
+
+- **Show hidden fields** (eye): shows the fields, sections and tabs that Frappe hides with `hidden` or `depends_on`. Fields hidden by permissions (a `permlevel` without read access) stay hidden. The docfields keep their real values, so the tree still flags these fields as `hidden`, and the inspector says why they are on screen.
+- **Mark fields** (highlighter): outlines fields and sections on the page. A solid purple outline marks a custom field. A dashed orange outline marks a hidden field, which you see only with **Show hidden fields** on. A tag in the corner says `custom`, `hidden` or both.
+
+Both tools stay on when you open another form. They switch off when you click the button again or close DevTools. They save nothing: switching off restores the form as Frappe draws it.
 
 The tree and the inspector update on their own when the route changes, the form refreshes, a value changes, or a dialog opens or closes.
 
@@ -133,7 +164,9 @@ When you select a node, the agent creates these variables in the page, like `$vm
 | `$frm` | The form (`cur_frm`). |
 | `$doc` | The document, the child table row or the dialog `doc`. |
 | `$df` | The docfield of the field. |
-| `$control` | The control of the field. |
+| `$control` | The control of the field. A cell has one only while it is edited. |
+| `$grid` | The Grid of a Table field, row or cell. |
+| `$row` | The GridRow of a row or cell. Rows on another page of the grid have none. |
 | `$meta` | The meta of the DocType. |
 | `$list` | The list view. |
 | `$dialog` | The dialog. |
@@ -213,6 +246,8 @@ The extension sends nothing outside the browser. It asks for no permissions, has
 | Passwords in the page buffers | Arguments named like `pwd`, `password`, `secret`, `token`, `api_key`, `otp`, `signature`, `card` or `cvv` are stored as `***`. |
 | Repeating a write | See the Reload rules in [frappe-ui mode](#frappe-ui-mode). |
 | Console variables | A name such as `$app` is written only if the page does not use it already. Names that do not apply are deleted. |
+| The form tools change the form | **Show hidden fields** changes no docfield. It wraps `get_status()` of each control and `refresh()` of each section and tab, on the instance only, and runs them with `hidden` and `hidden_due_to_dependency` set to 0 for the call. Then it puts back the real values. **Mark fields** adds one `<style>` element with outlines, scoped to the form page. Both stop when the last DevTools panel of the tab closes. |
+| The DocType shortcuts | The agent runs only an action that the inspector offers for that node. The actions only call `frappe.set_route`. |
 | The element picker blocks the page | It blocks pointer, touch and mouse events only while it picks. It stops on Esc, when the tab is hidden and when the last DevTools panel of the tab closes. |
 | Memory | The buffers keep at most 200 calls, 300 resource requests and 1000 timeline events. |
 | Unsupported sites | When the agent goes inactive, the early hooks stop recording and drop what they buffered. |
@@ -229,12 +264,15 @@ The extension sends nothing outside the browser. It asks for no permissions, has
 | `agent/serializer.js` | Turns Frappe objects into plain data. Cuts cycles, DOM nodes, jQuery objects and depth. |
 | `agent/view_tree.js` | Builds the tree and resolves each node id to the real Frappe object. |
 | `agent/inspector.js` | Inspector sections, visibility reasons, the element to highlight and the console variables. |
+| `agent/grid_inspector.js` | Child table sections: grid state, grid columns, row state and cell state. |
 | `agent/ui_tree.js` | frappe-ui mode tree: finds live resources in components, stores and globals. |
 | `agent/ui_inspector.js` | frappe-ui mode inspector, Info tab, status and the Reload action. |
 | `agent/highlighter.js` | Box that highlights an element on the page. |
 | `agent/picker.js` | Element selection mode. |
+| `agent/form_tools.js` | Form tools: **Show hidden fields** and **Mark fields**. |
 | `agent/timeline.js` | Timeline recorder: hooks for routes, forms, `set_value`, `frappe.call`, dialogs, messages and socket.io. |
-| `agent/agent.js` | Startup, mode detection, `developer_mode` and Frappe 16 checks, hooks and commands. |
+| `agent/agent.js` | Startup, mode detection, `developer_mode` and Frappe 16 checks, hooks and tree updates. |
+| `agent/commands.js` | Answers the commands of the panel and the background script. |
 | `devtools/` | Creates the Frappe tab with the Frappe "F" icon. |
 | `popup/` | Popup of the toolbar button. |
 | `panel/panel.js` | Panel entry point. Hands the messages to the views. |
@@ -296,6 +334,7 @@ The panel and the agent identify each node with a text id:
 | `form/section/<fieldname>` | Section |
 | `form/field/<fieldname>` | Field |
 | `form/row/<table>/<name>` | Child table row |
+| `form/row/<table>/<name>/field/<fieldname>` | Cell of a child table row |
 | `list` | List view |
 | `dialog/<i>` | Open dialog number `i` |
 | `dialog/<i>/field/<fieldname>` | Dialog field |
@@ -312,13 +351,15 @@ From the panel to the agent:
 
 | Type | Data | Answer |
 |---|---|---|
-| `hello` | | `status` and, if active, `tree` |
+| `hello` | | `status` and, if active, `tree`. In Desk mode also `form-tools`. |
 | `tree` | | `tree` |
-| `inspect` | `id` | `inspect` with `sections` and `consoleVars`, or `missing` |
+| `inspect` | `id` | `inspect` with `sections`, `consoleVars` and `actions`, or `missing` |
 | `highlight` | `id` or `null` | |
 | `pick` | `on` | `picked` with `id`, or `pick-cancelled` |
 | `info` | | `info` with `mode`, `summary` and `sections` |
-| `action` | `id`, `action` | `action-done` (frappe-ui `reload`) |
+| `action` | `id`, `action`, `confirmed` | `action-done` (frappe-ui `reload`, Desk `edit-doctype` and `customize-form`) |
+| `expand` | `id` of a row, `open` | The next `tree-changed` has the cells of the open rows (Desk only) |
+| `form-tool` | `tool` (`reveal` or `mark`), `on` | `form-tools` with `reveal` and `mark` (Desk only) |
 | `timeline` | | `timeline` with all recorded events |
 | `timeline-clear` | | |
 | `status` | | `status` (used by the background script) |
@@ -331,7 +372,9 @@ Add the pattern to both `matches` blocks of `content_scripts` in `manifest.json`
 
 ## Tests
 
-`tests/test_agent.py` opens Desk in Chromium with Playwright and injects the agent scripts. Then it sends the agent the same commands as the panel. It goes through an existing form, a new ToDo, a list and a dialog. It also checks the timeline: field changes with their stack, successful and failed calls, messages and dialogs. It does not save documents.
+`tests/test_agent.py` opens Desk in Chromium with Playwright and injects the agent scripts. Then it sends the agent the same commands as the panel. It goes through an existing form, a new ToDo, a list and a dialog. It also checks the timeline: field changes with their stack, successful and failed calls, messages and dialogs. Then it checks child tables (cells, grid state, row state and the picker on cells), the form tools and the DocType shortcuts. It does not save documents.
+
+Instead of `FRAPPE_PWD`, you can give an existing session in `FRAPPE_SID`. For example, `bench --site mysite.local browse --user Administrator` prints a login URL with a `sid`.
 
 ```sh
 python -m venv /tmp/venv-devtools
@@ -403,6 +446,7 @@ npx web-ext build --source-dir . --ignore-files tests README.md
 - Website pages (not Desk and not a frappe-ui app) are not supported.
 - In frappe-ui production builds, resources in `<script setup>` components and in plain modules are not reachable as live objects. Use a development build, or look at **Resource requests** and the timeline.
 - In frappe-ui apps you must be logged in as a Desk user, because the agent reads `developer_mode` and the Frappe version from `/desk`. This costs one extra request to `/desk` per page load.
+- **Show hidden fields** and **Mark fields** work on the fields of the form. They do not change the columns of child tables or the row editor.
 - The visibility reasons for a field are a guide only. The agent does not evaluate `depends_on` expressions. It shows only the expressions that exist and what Frappe already computed.
 - The Calls tab sees only the calls made while the panel is open. The timeline keeps earlier calls too, but only those made with `frappe.call`.
 - The timeline does not see changes that skip `frappe.model.set_value`, such as `frm.doc.field = value`.

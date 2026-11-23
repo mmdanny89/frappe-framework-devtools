@@ -13,6 +13,7 @@ class App {
     this.tree = new TreeView($("tree"), {
       onSelect: (id) => this.select(id),
       onHover: (id) => this.connection.send({ type: "highlight", id }),
+      onExpand: (id, open) => this.connection.send({ type: "expand", id, open }),
     });
     this.inspector = new InspectorView($("inspector"), {
       emptyText: EMPTY_TEXT.tree,
@@ -63,6 +64,7 @@ class App {
       case "action-done": return this.connection.send({ type: "inspect", id: this.selectedId });
       case "timeline": return this.timeline.reset(msg.events);
       case "timeline-events": return this.timeline.add(msg.events);
+      case "form-tools": return this.setFormTools(msg);
       case "error": return this.showError(msg);
     }
   }
@@ -79,6 +81,8 @@ class App {
 
   onTree(nodes) {
     this.tree.render(nodes);
+    // The form tools show only while a Desk form is open.
+    document.body.dataset.form = nodes.some((n) => n.kind === "form") ? "open" : "";
     // The tree changed (save, value change, depends_on…). Update the inspector too.
     if (this.selectedId) this.connection.send({ type: "inspect", id: this.selectedId });
   }
@@ -109,6 +113,12 @@ class App {
       this.connection.send({ type: "pick", on });
     });
     $("refresh").addEventListener("click", () => this.refresh());
+    document.querySelectorAll(".form-tool").forEach((b) =>
+      b.addEventListener("click", () => {
+        const on = b.getAttribute("aria-pressed") !== "true";
+        this.connection.send({ type: "form-tool", tool: b.dataset.tool, on });
+      })
+    );
     $("tree-filter").addEventListener("input", (e) => this.tree.setFilter(e.target.value));
   }
 
@@ -122,6 +132,13 @@ class App {
   refresh() {
     this.connection.send({ type: "tree" });
     if (this.activeTab === "info") this.connection.send({ type: "info" });
+  }
+
+  // The agent owns the state and answers every change with "form-tools".
+  setFormTools(state) {
+    document.querySelectorAll(".form-tool").forEach((b) =>
+      b.setAttribute("aria-pressed", String(Boolean(state[b.dataset.tool])))
+    );
   }
 
   setPicking(on) {

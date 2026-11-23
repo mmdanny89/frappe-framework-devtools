@@ -4,7 +4,7 @@
 // Node ids:
 //   route
 //   form, form/tab/<fieldname>, form/section/<fieldname>, form/field/<fieldname>
-//   form/row/<table>/<row name>
+//   form/row/<table>/<row name>, form/row/<table>/<row name>/field/<fieldname> (a cell)
 //   form/meta (meta of the form's DocType)
 //   list
 //   dialog/<i>, dialog/<i>/field/<fieldname>
@@ -17,6 +17,22 @@
   const LAYOUT_TYPES = new Set(["Tab Break", "Section Break", "Column Break"]);
 
   class ViewTree {
+    constructor() {
+      // Rows the panel expanded. Only these send their cells: a big table would send thousands.
+      this.openRows = new Set();
+    }
+
+    setRowOpen(id, open) {
+      if (open) this.openRows.add(id);
+      else this.openRows.delete(id);
+    }
+
+    // The picker can choose a cell of a closed row: open the row so that the node exists.
+    openPathTo(id) {
+      const row = id.match(/^form\/row\/[^/]+\/[^/]+(?=\/field\/)/);
+      if (row) this.openRows.add(row[0]);
+    }
+
     build() {
       const nodes = [this.routeNode()];
       const frm = this.currentForm();
@@ -61,6 +77,8 @@
     }
 
     formNode(frm) {
+      // One row form can be open in the whole page. Read it once, not once per row.
+      this.openGridRow = frappe.ui.form.get_open_grid_form?.();
       const root = node("form", frm.docname, "form", {
         detail: frm.doctype,
         flags: formFlags(frm),
@@ -89,11 +107,27 @@
       const control = frm.fields_dict[df.fieldname];
       const field = fieldNode(`form/field/${df.fieldname}`, df, control);
       if (TABLE_TYPES.has(df.fieldtype)) {
-        field.children = (frm.doc[df.fieldname] || []).map((row) =>
-          node(`form/row/${df.fieldname}/${row.name}`, `#${row.idx}`, "row", { detail: row.name })
-        );
+        field.children = (frm.doc[df.fieldname] || []).map((row) => this.rowNode(df, control, row));
       }
       return field;
+    }
+
+    // `lazy` tells the panel that the row has cells to ask for when it opens.
+    rowNode(df, control, row) {
+      const id = `form/row/${df.fieldname}/${row.name}`;
+      const gridRow = control?.grid?.grid_rows_by_docname?.[row.name];
+      const extra = { detail: row.name, flags: rowFlags(gridRow, row, this.openGridRow), lazy: true };
+      if (this.openRows.has(id)) extra.children = this.cellNodes(id, df, control?.grid, gridRow);
+      return node(id, `#${row.idx}`, "row", extra);
+    }
+
+    cellNodes(rowId, tableDf, grid, gridRow) {
+      const inGrid = new Set((grid?.visible_columns || []).map(([df]) => df.fieldname));
+      return rowDocfields(tableDf, gridRow).map((df) => {
+        const cell = fieldNode(`${rowId}/field/${df.fieldname}`, df, cellControl(gridRow, df.fieldname));
+        if (inGrid.has(df.fieldname)) cell.flags.push("in-grid");
+        return cell;
+      });
     }
 
     dialogNode(dialog, i) {
@@ -133,7 +167,11 @@
       const control = frm.fields_dict[fieldname];
       if (kind === "row") {
         const row = (frm.doc[fieldname] || []).find((r) => r.name === rowName);
-        return row ? { kind, frm, df, control, row } : null;
+        if (!row) return null;
+        const grid = control?.grid;
+        const gridRow = grid?.grid_rows_by_docname?.[row.name];
+        if (parts[4] === "field") return resolveCell({ frm, tableDf: df, grid, gridRow, row }, parts[5]);
+        return { kind, frm, df, control, row, grid, gridRow };
       }
       return { kind, frm, df, control };
     }
@@ -160,11 +198,16 @@
     return control ? `dialog/${index}/field/${control.dataset.fieldname}` : `dialog/${index}`;
   }
 
-  // The columns of a table row also have data-fieldname, so check the row first.
+  // The cells of a table row also have data-fieldname, so check the row first.
+  // A cell is a column of the grid row, or a field of the open row form.
   function formId(el) {
     const row = el.closest(".grid-row[data-name]");
     const table = row?.closest(".frappe-control[data-fieldname]");
-    if (row && table) return `form/row/${table.dataset.fieldname}/${row.dataset.name}`;
+    if (row && table) {
+      const rowId = `form/row/${table.dataset.fieldname}/${row.dataset.name}`;
+      const cell = el.closest(".grid-static-col[data-fieldname], .frappe-control[data-fieldname]");
+      return cell && row.contains(cell) ? `${rowId}/field/${cell.dataset.fieldname}` : rowId;
+    }
 
     const control = el.closest(".frappe-control[data-fieldname]");
     if (control) return `form/field/${control.dataset.fieldname}`;
@@ -186,11 +229,40 @@
   // Frappe computes disp_status on refresh: Write, Read or None (hidden).
   // control.df is the form's own copy of the docfield: set_df_property() and toggle_reqd() change it,
   // not the meta. So it wins over the meta docfield.
+  // The df flags count too: with "Show hidden fields" on, a hidden field is on screen but still hidden.
   function fieldFlags(df, control) {
+    const own = control?.df || df;
     const flags = [];
-    if (control?.disp_status === "None") flags.push("hidden");
-    if (control?.disp_status === "Read") flags.push("readonly");
-    if ((control?.df || df).reqd) flags.push("reqd");
+    if (control?.disp_status === "None" || own.hidden || own.hidden_due_to_dependency) flags.push("hidden");
+    // A cell that is not being edited has no control: then df.read_only is all there is.
+    if (control ? control.disp_status === "Read" : own.read_only) flags.push("readonly");
+    if (own.reqd) flags.push("reqd");
+    if (own.is_custom_field) flags.push("custom");
+    return flags;
+  }
+
+  // The row's own docfield copies (depends_on of the row changes them). Rows on another page
+  // of the grid have no GridRow yet: then the child meta.
+  function rowDocfields(tableDf, gridRow) {
+    const fields = gridRow?.docfields || frappe.get_meta(tableDf.options)?.fields || [];
+    return fields.filter((df) => df.fieldname && !frappe.model.layout_fields.includes(df.fieldtype));
+  }
+
+  // A cell has a control only while it is edited: inline in the grid or in the row form.
+  function cellControl(gridRow, fieldname) {
+    return gridRow?.on_grid_fields_dict?.[fieldname] || gridRow?.grid_form?.fields_dict?.[fieldname];
+  }
+
+  function resolveCell({ frm, tableDf, grid, gridRow, row }, fieldname) {
+    const df = rowDocfields(tableDf, gridRow).find((f) => f.fieldname === fieldname);
+    if (!df) return null;
+    return { kind: "cell", frm, df, control: cellControl(gridRow, fieldname), row, tableDf, grid, gridRow };
+  }
+
+  function rowFlags(gridRow, row, openGridRow) {
+    const flags = [];
+    if (gridRow && (gridRow === frappe.ui.form.editable_row || gridRow === openGridRow)) flags.push("editing");
+    if (row.__checked) flags.push("checked");
     return flags;
   }
 

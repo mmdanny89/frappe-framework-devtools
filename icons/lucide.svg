@@ -382,6 +382,10 @@
       <path d="M10 12.5 8 15l2 2.5" />
       <path d="m14 12.5 2 2.5-2 2.5" />
     </symbol>
+  <symbol viewBox="0 0 24 24" id="icon-highlighter">
+      <path d="m9 11-6 6v3h9l3-3" />
+      <path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" />
+    </symbol>
   <symbol viewBox="0 0 24 24" id="icon-eye">
       <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
       <circle cx="12" cy="12" r="3" />
